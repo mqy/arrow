@@ -175,7 +175,7 @@ where
         })
         .collect::<Result<Vec<Option<Field>>>>()
         .map(|result| result.into_iter().filter_map(|f| f).collect::<Vec<Field>>())
-        .map(|fields| Schema::new_with_metadata(fields, metadata))
+        .map(|fields| Schema::new(fields).with_metadata(metadata))
 }
 
 /// Try to convert Arrow schema metadata into a schema
@@ -220,10 +220,10 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Option<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
-    let custom_metadata = CustomMetaData::default();
+    let custom_metadata = None;
     let data_gen = arrow::ipc::writer::IpcDataGenerator::default();
     let mut serialized_schema =
-        data_gen.schema_to_bytes(&schema, &options, custom_metadata);
+        data_gen.schema_to_bytes(&schema, &options, &custom_metadata);
 
     // manually prepending the length to the schema as arrow uses the legacy IPC format
     // TODO: change after addressing ARROW-9777
@@ -1505,99 +1505,93 @@ mod tests {
             .cloned()
             .collect();
 
-        let schema = Schema::new_with_metadata(
-            vec![
-                Field::new("c1", DataType::Utf8, false),
-                Field::new("c2", DataType::Binary, false),
-                Field::new("c3", DataType::FixedSizeBinary(3), false),
-                Field::new("c4", DataType::Boolean, false),
-                Field::new("c5", DataType::Date32(DateUnit::Day), false),
-                Field::new("c6", DataType::Date64(DateUnit::Millisecond), false),
-                Field::new("c7", DataType::Time32(TimeUnit::Second), false),
-                Field::new("c8", DataType::Time32(TimeUnit::Millisecond), false),
-                Field::new("c13", DataType::Time64(TimeUnit::Microsecond), false),
-                Field::new("c14", DataType::Time64(TimeUnit::Nanosecond), false),
-                Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
-                Field::new(
-                    "c16",
-                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
-                    false,
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Binary, false),
+            Field::new("c3", DataType::FixedSizeBinary(3), false),
+            Field::new("c4", DataType::Boolean, false),
+            Field::new("c5", DataType::Date32(DateUnit::Day), false),
+            Field::new("c6", DataType::Date64(DateUnit::Millisecond), false),
+            Field::new("c7", DataType::Time32(TimeUnit::Second), false),
+            Field::new("c8", DataType::Time32(TimeUnit::Millisecond), false),
+            Field::new("c13", DataType::Time64(TimeUnit::Microsecond), false),
+            Field::new("c14", DataType::Time64(TimeUnit::Nanosecond), false),
+            Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
+            Field::new(
+                "c16",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "c17",
+                DataType::Timestamp(
+                    TimeUnit::Microsecond,
+                    Some("Africa/Johannesburg".to_string()),
                 ),
-                Field::new(
-                    "c17",
-                    DataType::Timestamp(
-                        TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
-                    ),
-                    false,
-                ),
-                Field::new(
-                    "c18",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    false,
-                ),
-                Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
-                Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
-                Field::new(
-                    "c21",
-                    DataType::List(Box::new(Field::new("list", DataType::Boolean, true))),
-                    false,
-                ),
-                // Field::new(
-                //     "c22",
-                //     DataType::FixedSizeList(Box::new(DataType::Boolean), 5),
-                //     false,
-                // ),
-                // Field::new(
-                //     "c23",
-                //     DataType::List(Box::new(DataType::LargeList(Box::new(
-                //         DataType::Struct(vec![
-                //             Field::new("a", DataType::Int16, true),
-                //             Field::new("b", DataType::Float64, false),
-                //         ]),
-                //     )))),
-                //     true,
-                // ),
-                Field::new(
-                    "c24",
-                    DataType::Struct(vec![
-                        Field::new("a", DataType::Utf8, false),
-                        Field::new("b", DataType::UInt16, false),
-                    ]),
-                    false,
-                ),
-                Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
-                Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
-                // Field::new("c27", DataType::Duration(TimeUnit::Second), false),
-                // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
-                // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
-                // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
-                Field::new_dict(
-                    "c31",
-                    DataType::Dictionary(
-                        Box::new(DataType::Int32),
-                        Box::new(DataType::Utf8),
-                    ),
-                    true,
-                    123,
-                    true,
-                ),
-                Field::new("c32", DataType::LargeBinary, true),
-                Field::new("c33", DataType::LargeUtf8, true),
-                // Field::new(
-                //     "c34",
-                //     DataType::LargeList(Box::new(DataType::List(Box::new(
-                //         DataType::Struct(vec![
-                //             Field::new("a", DataType::Int16, true),
-                //             Field::new("b", DataType::Float64, true),
-                //         ]),
-                //     )))),
-                //     true,
-                // ),
-                Field::new("c35", DataType::Null, true),
-            ],
-            metadata,
-        );
+                false,
+            ),
+            Field::new(
+                "c18",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
+            Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
+            Field::new(
+                "c21",
+                DataType::List(Box::new(Field::new("list", DataType::Boolean, true))),
+                false,
+            ),
+            // Field::new(
+            //     "c22",
+            //     DataType::FixedSizeList(Box::new(DataType::Boolean), 5),
+            //     false,
+            // ),
+            // Field::new(
+            //     "c23",
+            //     DataType::List(Box::new(DataType::LargeList(Box::new(
+            //         DataType::Struct(vec![
+            //             Field::new("a", DataType::Int16, true),
+            //             Field::new("b", DataType::Float64, false),
+            //         ]),
+            //     )))),
+            //     true,
+            // ),
+            Field::new(
+                "c24",
+                DataType::Struct(vec![
+                    Field::new("a", DataType::Utf8, false),
+                    Field::new("b", DataType::UInt16, false),
+                ]),
+                false,
+            ),
+            Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
+            Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
+            // Field::new("c27", DataType::Duration(TimeUnit::Second), false),
+            // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
+            // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
+            // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
+            Field::new(
+                "c31",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            )
+            .with_dict(123, true),
+            Field::new("c32", DataType::LargeBinary, true),
+            Field::new("c33", DataType::LargeUtf8, true),
+            // Field::new(
+            //     "c34",
+            //     DataType::LargeList(Box::new(DataType::List(Box::new(
+            //         DataType::Struct(vec![
+            //             Field::new("a", DataType::Int16, true),
+            //             Field::new("b", DataType::Float64, true),
+            //         ]),
+            //     )))),
+            //     true,
+            // ),
+            Field::new("c35", DataType::Null, true),
+        ])
+        .with_metadata(metadata);
 
         // write to an empty parquet file so that schema is serialized
         let file = get_temp_file("test_arrow_schema_roundtrip.parquet", &[]);
@@ -1630,44 +1624,38 @@ mod tests {
             .cloned()
             .collect();
 
-        let schema = Schema::new_with_metadata(
-            vec![
-                Field::new(
-                    "c21",
-                    DataType::List(Box::new(Field::new(
-                        "array",
-                        DataType::Boolean,
-                        true,
-                    ))),
-                    false,
+        let schema = Schema::new(vec![
+            Field::new(
+                "c21",
+                DataType::List(Box::new(Field::new("array", DataType::Boolean, true))),
+                false,
+            ),
+            Field::new(
+                "c22",
+                DataType::FixedSizeList(
+                    Box::new(Field::new("items", DataType::Boolean, false)),
+                    5,
                 ),
-                Field::new(
-                    "c22",
-                    DataType::FixedSizeList(
-                        Box::new(Field::new("items", DataType::Boolean, false)),
-                        5,
-                    ),
-                    false,
-                ),
-                Field::new(
-                    "c23",
-                    DataType::List(Box::new(Field::new(
+                false,
+            ),
+            Field::new(
+                "c23",
+                DataType::List(Box::new(Field::new(
+                    "items",
+                    DataType::LargeList(Box::new(Field::new(
                         "items",
-                        DataType::LargeList(Box::new(Field::new(
-                            "items",
-                            DataType::Struct(vec![
-                                Field::new("a", DataType::Int16, true),
-                                Field::new("b", DataType::Float64, false),
-                            ]),
-                            true,
-                        ))),
+                        DataType::Struct(vec![
+                            Field::new("a", DataType::Int16, true),
+                            Field::new("b", DataType::Float64, false),
+                        ]),
                         true,
                     ))),
                     true,
-                ),
-            ],
-            metadata,
-        );
+                ))),
+                true,
+            ),
+        ])
+        .with_metadata(metadata);
 
         // write to an empty parquet file so that schema is serialized
         let file = get_temp_file("test_arrow_schema_roundtrip_lists.parquet", &[]);

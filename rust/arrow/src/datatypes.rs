@@ -195,7 +195,7 @@ pub struct Field {
     nullable: bool,
     dict_id: i64,
     dict_is_ordered: bool,
-    /// A map of key-value pairs containing additional meta data.
+    /// An optional map of key-value pairs containing additional meta data.
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<CustomMetaData>,
 }
@@ -1267,6 +1267,10 @@ impl Field {
     }
 
     /// Creates a new field
+    #[deprecated(
+        since = "2.0.0",
+        note = "This method is deprecated in favour of `new(...).with_dict(...)`"
+    )]
     pub fn new_dict(
         name: &str,
         data_type: DataType,
@@ -1274,23 +1278,22 @@ impl Field {
         dict_id: i64,
         dict_is_ordered: bool,
     ) -> Self {
-        Field {
-            name: name.to_string(),
-            data_type,
-            nullable,
-            dict_id,
-            dict_is_ordered,
-            metadata: None,
-        }
+        Field::new(name, data_type, nullable).with_dict(dict_id, dict_is_ordered)
     }
 
-    pub fn set_dict(&mut self, dict_id: i64, dict_is_ordered: bool) {
+    // The builder pattern: https://doc.rust-lang.org/1.0.0/style/ownership/builders.html
+
+    /// Set dict.
+    pub fn with_dict(mut self, dict_id: i64, dict_is_ordered: bool) -> Self {
         self.dict_id = dict_id;
         self.dict_is_ordered = dict_is_ordered;
+        self
     }
 
-    pub fn set_metadata(&mut self, metadata: Option<CustomMetaData>) {
+    /// Set optional custom metadata.
+    pub fn with_metadata(mut self, metadata: Option<CustomMetaData>) -> Self {
         self.metadata = metadata;
+        self
     }
 
     /// Returns an immutable reference to the `Field`'s name
@@ -1456,9 +1459,8 @@ impl Field {
                     _ => data_type,
                 };
 
-                let mut field = Field::new(&name, data_type, nullable);
-                field.set_dict(dict_id, dict_is_ordered);
-                Ok(field)
+                Ok(Field::new(&name, data_type, nullable)
+                    .with_dict(dict_id, dict_is_ordered))
             }
             _ => Err(ArrowError::ParseError(
                 "Invalid json value type for field".to_string(),
@@ -1624,7 +1626,7 @@ impl fmt::Display for Field {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Schema {
     pub(crate) fields: Vec<Field>,
-    /// A map of key-value pairs containing additional meta data.
+    /// An optional map of key-value pairs containing additional meta data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) metadata: Option<CustomMetaData>,
 }
@@ -1673,12 +1675,21 @@ impl Schema {
     ///
     /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
     /// ```
+    #[deprecated(
+        since = "2.0.0",
+        note = "This method is deprecated in favour of `new(...).with_metadata(...)`"
+    )]
     #[inline]
     pub const fn new_with_metadata(fields: Vec<Field>, metadata: CustomMetaData) -> Self {
         Self {
             fields,
             metadata: Some(metadata),
         }
+    }
+    /// Set the optional metadata.
+    pub fn with_metadata(mut self, metadata: CustomMetaData) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 
     /// Merge schema into self if it is compatible. Struct fields will be merged recursively.
@@ -2142,111 +2153,105 @@ mod tests {
             .cloned()
             .collect();
 
-        let schema = Schema::new_with_metadata(
-            vec![
-                Field::new("c1", DataType::Utf8, false),
-                Field::new("c2", DataType::Binary, false),
-                Field::new("c3", DataType::FixedSizeBinary(3), false),
-                Field::new("c4", DataType::Boolean, false),
-                Field::new("c5", DataType::Date32(DateUnit::Day), false),
-                Field::new("c6", DataType::Date64(DateUnit::Millisecond), false),
-                Field::new("c7", DataType::Time32(TimeUnit::Second), false),
-                Field::new("c8", DataType::Time32(TimeUnit::Millisecond), false),
-                Field::new("c9", DataType::Time32(TimeUnit::Microsecond), false),
-                Field::new("c10", DataType::Time32(TimeUnit::Nanosecond), false),
-                Field::new("c11", DataType::Time64(TimeUnit::Second), false),
-                Field::new("c12", DataType::Time64(TimeUnit::Millisecond), false),
-                Field::new("c13", DataType::Time64(TimeUnit::Microsecond), false),
-                Field::new("c14", DataType::Time64(TimeUnit::Nanosecond), false),
-                Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
-                Field::new(
-                    "c16",
-                    DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
-                    false,
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Binary, false),
+            Field::new("c3", DataType::FixedSizeBinary(3), false),
+            Field::new("c4", DataType::Boolean, false),
+            Field::new("c5", DataType::Date32(DateUnit::Day), false),
+            Field::new("c6", DataType::Date64(DateUnit::Millisecond), false),
+            Field::new("c7", DataType::Time32(TimeUnit::Second), false),
+            Field::new("c8", DataType::Time32(TimeUnit::Millisecond), false),
+            Field::new("c9", DataType::Time32(TimeUnit::Microsecond), false),
+            Field::new("c10", DataType::Time32(TimeUnit::Nanosecond), false),
+            Field::new("c11", DataType::Time64(TimeUnit::Second), false),
+            Field::new("c12", DataType::Time64(TimeUnit::Millisecond), false),
+            Field::new("c13", DataType::Time64(TimeUnit::Microsecond), false),
+            Field::new("c14", DataType::Time64(TimeUnit::Nanosecond), false),
+            Field::new("c15", DataType::Timestamp(TimeUnit::Second, None), false),
+            Field::new(
+                "c16",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "c17",
+                DataType::Timestamp(
+                    TimeUnit::Microsecond,
+                    Some("Africa/Johannesburg".to_string()),
                 ),
-                Field::new(
-                    "c17",
-                    DataType::Timestamp(
-                        TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".to_string()),
-                    ),
-                    false,
+                false,
+            ),
+            Field::new(
+                "c18",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
+            Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
+            Field::new(
+                "c21",
+                DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+                false,
+            ),
+            Field::new(
+                "c22",
+                DataType::FixedSizeList(
+                    Box::new(Field::new("bools", DataType::Boolean, false)),
+                    5,
                 ),
-                Field::new(
-                    "c18",
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    false,
-                ),
-                Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
-                Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
-                Field::new(
-                    "c21",
-                    DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
-                    false,
-                ),
-                Field::new(
-                    "c22",
-                    DataType::FixedSizeList(
-                        Box::new(Field::new("bools", DataType::Boolean, false)),
-                        5,
-                    ),
-                    false,
-                ),
-                Field::new(
-                    "c23",
+                false,
+            ),
+            Field::new(
+                "c23",
+                DataType::List(Box::new(Field::new(
+                    "inner_list",
                     DataType::List(Box::new(Field::new(
-                        "inner_list",
-                        DataType::List(Box::new(Field::new(
-                            "struct",
-                            DataType::Struct(vec![]),
-                            true,
-                        ))),
+                        "struct",
+                        DataType::Struct(vec![]),
+                        true,
+                    ))),
+                    false,
+                ))),
+                true,
+            ),
+            Field::new(
+                "c24",
+                DataType::Struct(vec![
+                    Field::new("a", DataType::Utf8, false),
+                    Field::new("b", DataType::UInt16, false),
+                ]),
+                false,
+            ),
+            Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
+            Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
+            Field::new("c27", DataType::Duration(TimeUnit::Second), false),
+            Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
+            Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
+            Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
+            Field::new(
+                "c31",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            )
+            .with_dict(123, true),
+            Field::new("c32", DataType::LargeBinary, true),
+            Field::new("c33", DataType::LargeUtf8, true),
+            Field::new(
+                "c34",
+                DataType::LargeList(Box::new(Field::new(
+                    "inner_large_list",
+                    DataType::LargeList(Box::new(Field::new(
+                        "struct",
+                        DataType::Struct(vec![]),
                         false,
                     ))),
                     true,
-                ),
-                Field::new(
-                    "c24",
-                    DataType::Struct(vec![
-                        Field::new("a", DataType::Utf8, false),
-                        Field::new("b", DataType::UInt16, false),
-                    ]),
-                    false,
-                ),
-                Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
-                Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
-                Field::new("c27", DataType::Duration(TimeUnit::Second), false),
-                Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
-                Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
-                Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
-                Field::new_dict(
-                    "c31",
-                    DataType::Dictionary(
-                        Box::new(DataType::Int32),
-                        Box::new(DataType::Utf8),
-                    ),
-                    true,
-                    123,
-                    true,
-                ),
-                Field::new("c32", DataType::LargeBinary, true),
-                Field::new("c33", DataType::LargeUtf8, true),
-                Field::new(
-                    "c34",
-                    DataType::LargeList(Box::new(Field::new(
-                        "inner_large_list",
-                        DataType::LargeList(Box::new(Field::new(
-                            "struct",
-                            DataType::Struct(vec![]),
-                            false,
-                        ))),
-                        true,
-                    ))),
-                    true,
-                ),
-            ],
-            metadata,
-        );
+                ))),
+                true,
+            ),
+        ])
+        .with_metadata(metadata);
 
         let expected = schema.to_json();
         let json = r#"{
@@ -2832,13 +2837,12 @@ mod tests {
                 ]),
                 false,
             ),
-            Field::new_dict(
+            Field::new(
                 "interests",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                 true,
-                123,
-                true,
-            ),
+            )
+            .with_dict(123, true),
         ])
     }
 
@@ -2854,23 +2858,23 @@ mod tests {
                     false,
                 ),
             ]),
-            Schema::new_with_metadata(
-                vec![
-                    // nullable merge
-                    Field::new("last_name", DataType::Utf8, true),
-                    Field::new(
-                        "address",
-                        DataType::Struct(vec![
-                            // add new nested field
-                            Field::new("street", DataType::Utf8, false),
-                            // nullable merge on nested field
-                            Field::new("zip", DataType::UInt16, true),
-                        ]),
-                        false,
-                    ),
-                    // new field
-                    Field::new("number", DataType::Utf8, true),
-                ],
+            Schema::new(vec![
+                // nullable merge
+                Field::new("last_name", DataType::Utf8, true),
+                Field::new(
+                    "address",
+                    DataType::Struct(vec![
+                        // add new nested field
+                        Field::new("street", DataType::Utf8, false),
+                        // nullable merge on nested field
+                        Field::new("zip", DataType::UInt16, true),
+                    ]),
+                    false,
+                ),
+                // new field
+                Field::new("number", DataType::Utf8, true),
+            ])
+            .with_metadata(
                 [("foo".to_string(), "bar".to_string())]
                     .iter()
                     .cloned()
@@ -2880,20 +2884,20 @@ mod tests {
 
         assert_eq!(
             merged,
-            Schema::new_with_metadata(
-                vec![
-                    Field::new("first_name", DataType::Utf8, false),
-                    Field::new("last_name", DataType::Utf8, true),
-                    Field::new(
-                        "address",
-                        DataType::Struct(vec![
-                            Field::new("zip", DataType::UInt16, true),
-                            Field::new("street", DataType::Utf8, false),
-                        ]),
-                        false,
-                    ),
-                    Field::new("number", DataType::Utf8, true),
-                ],
+            Schema::new(vec![
+                Field::new("first_name", DataType::Utf8, false),
+                Field::new("last_name", DataType::Utf8, true),
+                Field::new(
+                    "address",
+                    DataType::Struct(vec![
+                        Field::new("zip", DataType::UInt16, true),
+                        Field::new("street", DataType::Utf8, false),
+                    ]),
+                    false,
+                ),
+                Field::new("number", DataType::Utf8, true),
+            ])
+            .with_metadata(
                 [("foo".to_string(), "bar".to_string())]
                     .iter()
                     .cloned()
@@ -2944,20 +2948,20 @@ mod tests {
 
         // incompatible metadata should throw error
         assert!(Schema::try_merge(&[
-            Schema::new_with_metadata(
-                vec![Field::new("first_name", DataType::Utf8, false)],
-                [("foo".to_string(), "bar".to_string()),]
-                    .iter()
-                    .cloned()
-                    .collect::<CustomMetaData>()
-            ),
-            Schema::new_with_metadata(
-                vec![Field::new("last_name", DataType::Utf8, false)],
-                [("foo".to_string(), "baz".to_string()),]
-                    .iter()
-                    .cloned()
-                    .collect::<CustomMetaData>()
-            )
+            Schema::new(vec![Field::new("first_name", DataType::Utf8, false)])
+                .with_metadata(
+                    [("foo".to_string(), "bar".to_string()),]
+                        .iter()
+                        .cloned()
+                        .collect::<CustomMetaData>()
+                ),
+            Schema::new(vec![Field::new("last_name", DataType::Utf8, false)])
+                .with_metadata(
+                    [("foo".to_string(), "baz".to_string()),]
+                        .iter()
+                        .cloned()
+                        .collect::<CustomMetaData>()
+                )
         ])
         .is_err());
 

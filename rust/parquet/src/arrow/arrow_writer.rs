@@ -1237,13 +1237,12 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary() {
         // define schema
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
-            42,
-            true,
-        )]));
+        )
+        .with_dict(42, true)]));
 
         // create some data
         let d: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
@@ -1263,13 +1262,12 @@ mod tests {
     #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
             true,
-            42,
-            true,
-        )]));
+        )
+        .with_dict(42, true)]));
 
         // create some data
         let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
@@ -1293,13 +1291,12 @@ mod tests {
     #[test]
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "dictionary",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
             true,
-            42,
-            true,
-        )]));
+        )
+        .with_dict(42, true)]));
 
         // create some data
         let d: UInt8DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]

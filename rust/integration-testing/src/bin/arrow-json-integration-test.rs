@@ -84,10 +84,11 @@ fn json_to_arrow(json_name: &str, arrow_name: &str, verbose: bool) -> Result<()>
     let json_file = read_json_file(json_name)?;
 
     let arrow_file = File::create(arrow_name)?;
-    let mut writer = FileWriter::try_new(arrow_file, &json_file.schema)?;
+    let mut writer = FileWriter::new(arrow_file, &json_file.schema);
+    writer.write_header_schema()?;
 
     for b in json_file.batches {
-        writer.write(&b)?;
+        writer.write_record_batch(&b)?;
     }
 
     Ok(())
@@ -540,17 +541,15 @@ fn dictionary_array_from_json(
             let null_buf = create_null_buf(&json_col);
 
             // build the key data into a buffer, then construct values separately
-            let key_field = Field::new_dict(
-                "key",
-                dict_key.clone(),
-                field.is_nullable(),
-                field
-                    .dict_id()
-                    .expect("Dictionary fields must have a dict_id value"),
-                field
-                    .dict_is_ordered()
-                    .expect("Dictionary fields must have a dict_is_ordered value"),
-            );
+            let key_field = Field::new("key", dict_key.clone(), field.is_nullable())
+                .with_dict(
+                    field
+                        .dict_id()
+                        .expect("Dictionary fields must have a dict_id value"),
+                    field
+                        .dict_is_ordered()
+                        .expect("Dictionary fields must have a dict_is_ordered value"),
+                );
             let keys = array_from_json(&key_field, json_col, None)?;
             // note: not enough info on nullability of dictionary
             let value_field = Field::new("value", dict_value.clone(), true);
