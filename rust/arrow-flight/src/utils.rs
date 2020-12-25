@@ -21,7 +21,7 @@ use std::convert::TryFrom;
 
 use crate::{FlightData, SchemaResult};
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{CustomMetaData, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::{convert, reader, writer, writer::IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
@@ -57,7 +57,8 @@ pub fn flight_schema_from_arrow_schema(
     options: &IpcWriteOptions,
 ) -> SchemaResult {
     let data_gen = writer::IpcDataGenerator::default();
-    let schema_bytes = data_gen.schema_to_bytes(schema, &options);
+    let schema_bytes =
+        data_gen.schema_to_bytes(schema, &options, CustomMetaData::default());
 
     SchemaResult {
         schema: schema_bytes.ipc_message,
@@ -70,7 +71,7 @@ pub fn flight_data_from_arrow_schema(
     options: &IpcWriteOptions,
 ) -> FlightData {
     let data_gen = writer::IpcDataGenerator::default();
-    let schema = data_gen.schema_to_bytes(schema, &options);
+    let schema = data_gen.schema_to_bytes(schema, &options, CustomMetaData::default());
     FlightData {
         flight_descriptor: None,
         app_metadata: vec![],
@@ -129,6 +130,7 @@ pub fn flight_data_to_arrow_batch(
 
     let dictionaries_by_field = Vec::new();
 
+    let custom_metadata = reader::read_custom_metadata(message.custom_metadata());
     message
         .header_as_record_batch()
         .ok_or_else(|| {
@@ -144,6 +146,7 @@ pub fn flight_data_to_arrow_batch(
                     batch,
                     schema,
                     &dictionaries_by_field,
+                    custom_metadata,
                 ))
             },
         )

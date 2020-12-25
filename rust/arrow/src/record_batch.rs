@@ -111,6 +111,14 @@ impl RecordBatch {
         Ok(RecordBatch { schema, columns })
     }
 
+    pub fn try_new_with_custom_metadata(
+        _schema: SchemaRef,
+        _columns: Vec<ArrayRef>,
+        _custom_metadata: CustomMetaData,
+    ) -> Result<Self> {
+        unimplemented!();
+    }
+
     /// Returns the [`Schema`](crate::datatypes::Schema) of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()

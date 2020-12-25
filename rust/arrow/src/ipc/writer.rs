@@ -107,6 +107,7 @@ impl IpcDataGenerator {
         &self,
         schema: &Schema,
         write_options: &IpcWriteOptions,
+        custom_metadata: CustomMetaData,
     ) -> EncodedData {
         let mut fbb = FlatBufferBuilder::new();
         let schema = {
@@ -114,13 +115,34 @@ impl IpcDataGenerator {
             fb.as_union_value()
         };
 
-        let mut message = ipc::MessageBuilder::new(&mut fbb);
-        message.add_version(write_options.metadata_version);
-        message.add_header_type(ipc::MessageHeader::Schema);
-        message.add_bodyLength(0);
-        message.add_header(schema);
-        // TODO: custom metadata
-        let data = message.finish();
+        // Optional custom metadata.
+        let mut fb_metadata = None;
+        if !custom_metadata.is_empty() {
+            let mut kv_vec = vec![];
+            for (k, v) in custom_metadata {
+                let kv_args = ipc::KeyValueArgs {
+                    key: Some(fbb.create_string(k.as_str())),
+                    value: Some(fbb.create_string(v.as_str())),
+                };
+                let kv_offset = ipc::KeyValue::create(&mut fbb, &kv_args);
+                kv_vec.push(kv_offset);
+            }
+
+            fb_metadata = Some(fbb.create_vector(&kv_vec));
+        }
+
+        let message_args = ipc::MessageArgs {
+            version: write_options.metadata_version,
+            header_type: ipc::MessageHeader::Schema,
+            header: Some(schema),
+            bodyLength: 0,
+            custom_metadata: fb_metadata,
+        };
+
+        // NOTE:
+        // As of crate `flatbuffers` 0.8.0, with `Message::new()`, almost no way to fix
+        // compilation error caused by "multiple mutable reference to fbb".
+        let data = ipc::Message::create(&mut fbb, &message_args);
         fbb.finish(data, None);
 
         let data = fbb.finished_data();
@@ -366,6 +388,21 @@ impl<W: Write> FileWriter<W> {
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self> {
+        FileWriter::try_new_with_options_and_custom_metadata(
+            writer,
+            schema,
+            write_options,
+            CustomMetaData::default(),
+        )
+    }
+
+    /// Try create a new writer with IpcWriteOptions and optional custom metadata.
+    pub fn try_new_with_options_and_custom_metadata(
+        writer: W,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+        custom_metadata: CustomMetaData,
+    ) -> Result<Self> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
         // write magic to header
@@ -373,7 +410,8 @@ impl<W: Write> FileWriter<W> {
         // create an 8-byte boundary after the header
         writer.write_all(&[0, 0])?;
         // write the schema, set the written bytes to the schema + header
-        let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
+        let encoded_message =
+            data_gen.schema_to_bytes(schema, &write_options, custom_metadata);
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
         Ok(Self {
             writer,
@@ -472,6 +510,8 @@ pub struct StreamWriter<W: Write> {
     write_options: IpcWriteOptions,
     /// A reference to the schema, used in validating record batches
     schema: Schema,
+    /// Optional custom metadata.
+    custom_metadata: CustomMetaData,
     /// Whether the writer footer has been written, and the writer is finished
     finished: bool,
     /// Keeps track of dictionaries that have been written
@@ -492,15 +532,33 @@ impl<W: Write> StreamWriter<W> {
         schema: &Schema,
         write_options: IpcWriteOptions,
     ) -> Result<Self> {
+        StreamWriter::try_new_with_options_and_custom_metadata(
+            writer,
+            schema,
+            write_options,
+            CustomMetaData::default(),
+        )
+    }
+
+    pub fn try_new_with_options_and_custom_metadata(
+        writer: W,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+        custom_metadata: CustomMetaData,
+    ) -> Result<Self> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
         // write the schema, set the written bytes to the schema
-        let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
+
+        let meta_bak = custom_metadata.clone();
+        let encoded_message =
+            data_gen.schema_to_bytes(schema, &write_options, custom_metadata);
         write_message(&mut writer, encoded_message, &write_options)?;
         Ok(Self {
             writer,
             write_options,
             schema: schema.clone(),
+            custom_metadata: meta_bak,
             finished: false,
             dictionary_tracker: DictionaryTracker::new(false),
             data_gen,

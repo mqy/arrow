@@ -17,14 +17,15 @@
 
 //! Utilities for converting between IPC types and native Arrow types
 
-use crate::datatypes::{DataType, DateUnit, Field, IntervalUnit, Schema, TimeUnit};
+use crate::datatypes::{
+    CustomMetaData, DataType, DateUnit, Field, IntervalUnit, Schema, TimeUnit,
+};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
 
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, WIPOffset,
 };
-use std::collections::HashMap;
 
 use DataType::*;
 
@@ -49,44 +50,47 @@ pub fn schema_to_fb_offset<'a>(
         fields.push(fb_field);
     }
 
-    let mut custom_metadata = vec![];
-    for (k, v) in schema.metadata() {
-        let fb_key_name = fbb.create_string(k.as_str());
-        let fb_val_name = fbb.create_string(v.as_str());
+    let mut metadata_fb = None;
+    if let Some(metadata) = schema.metadata() {
+        let mut kv_list = vec![];
+        for (k, v) in metadata {
+            let fb_key_name = fbb.create_string(k.as_str());
+            let fb_val_name = fbb.create_string(v.as_str());
 
-        let mut kv_builder = ipc::KeyValueBuilder::new(fbb);
-        kv_builder.add_key(fb_key_name);
-        kv_builder.add_value(fb_val_name);
-        custom_metadata.push(kv_builder.finish());
-    }
+            let mut kv_builder = ipc::KeyValueBuilder::new(fbb);
+            kv_builder.add_key(fb_key_name);
+            kv_builder.add_value(fb_val_name);
+            kv_list.push(kv_builder.finish());
+        }
+        metadata_fb = Some(fbb.create_vector(&kv_list));
+    };
 
     let fb_field_list = fbb.create_vector(&fields);
-    let fb_metadata_list = fbb.create_vector(&custom_metadata);
-
     let mut builder = ipc::SchemaBuilder::new(fbb);
     builder.add_fields(fb_field_list);
-    builder.add_custom_metadata(fb_metadata_list);
+    if let Some(metadata) = metadata_fb {
+        builder.add_custom_metadata(metadata);
+    }
     builder.finish()
 }
 
 /// Convert an IPC Field to Arrow Field
 impl<'a> From<ipc::Field<'a>> for Field {
     fn from(field: ipc::Field) -> Field {
+        let mut arrow_field = Field::new(
+            field.name().unwrap(),
+            get_data_type(field, true),
+            field.nullable(),
+        );
+
         if let Some(dictionary) = field.dictionary() {
-            Field::new_dict(
-                field.name().unwrap(),
-                get_data_type(field, true),
-                field.nullable(),
-                dictionary.id(),
-                dictionary.isOrdered(),
-            )
-        } else {
-            Field::new(
-                field.name().unwrap(),
-                get_data_type(field, true),
-                field.nullable(),
-            )
+            arrow_field.set_dict(dictionary.id(), dictionary.isOrdered());
         }
+
+        let metadata = ipc::reader::read_custom_metadata(field.custom_metadata());
+        arrow_field.set_metadata(metadata);
+
+        arrow_field
     }
 }
 
@@ -106,21 +110,19 @@ pub fn fb_to_schema(fb: ipc::Schema) -> Schema {
         fields.push(c_field.into());
     }
 
-    let mut metadata: HashMap<String, String> = HashMap::default();
     if let Some(md_fields) = fb.custom_metadata() {
-        let len = md_fields.len();
-        for i in 0..len {
-            let kv = md_fields.get(i);
-            let k_str = kv.key();
-            let v_str = kv.value();
-            if let Some(k) = k_str {
-                if let Some(v) = v_str {
-                    metadata.insert(k.to_string(), v.to_string());
-                }
+        let mut metadata = CustomMetaData::new();
+        for kv in md_fields {
+            if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
+                metadata.insert(k.to_string().clone(), v.to_string().clone());
             }
         }
+        if !metadata.is_empty() {
+            return Schema::new_with_metadata(fields, metadata);
+        }
     }
-    Schema::new_with_metadata(fields, metadata)
+
+    Schema::new(fields)
 }
 
 /// Deserialize an IPC message into a schema
@@ -647,11 +649,11 @@ pub(crate) fn get_fb_dictionary<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datatypes::{DataType, Field, Schema};
+    use crate::datatypes::{CustomMetaData, DataType, Field, Schema};
 
     #[test]
     fn convert_schema_round_trip() {
-        let md: HashMap<String, String> = [("Key".to_string(), "value".to_string())]
+        let md: CustomMetaData = [("Key".to_string(), "value".to_string())]
             .iter()
             .cloned()
             .collect();

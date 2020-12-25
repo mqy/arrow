@@ -20,14 +20,15 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::*;
 use crate::buffer::Buffer;
 use crate::compute::cast;
-use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
+use crate::datatypes::{
+    CustomMetaData, DataType, Field, IntervalUnit, Schema, SchemaRef,
+};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
@@ -434,12 +435,44 @@ fn create_dictionary_array(
     }
 }
 
+/// Read optional custom metadata for:
+/// [Field](ipc::Field), [Schema](ipc::Schema), [Message](ipc::Message), [Footer](ipc::Footer).
+pub fn read_custom_metadata<'a>(
+    fields: Option<
+        flatbuffers::Vector<'a, flatbuffers::ForwardsUOffset<ipc::KeyValue<'a>>>,
+    >,
+) -> Option<CustomMetaData> {
+    let fields = fields?;
+    if fields.is_empty() {
+        return None;
+    }
+
+    let len = fields.len();
+    let mut metadata = CustomMetaData::default();
+
+    for i in 0..len {
+        let kv = fields.get(i);
+        if let Some(k) = kv.key() {
+            if let Some(v) = kv.value() {
+                metadata.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+
+    if metadata.is_empty() {
+        return None;
+    }
+
+    Some(metadata)
+}
+
 /// Creates a record batch from binary data using the `ipc::RecordBatch` indexes and the `Schema`
 pub fn read_record_batch(
     buf: &[u8],
     batch: ipc::RecordBatch,
     schema: SchemaRef,
     dictionaries: &[Option<ArrayRef>],
+    custom_metadata: Option<CustomMetaData>,
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IoError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -468,16 +501,21 @@ pub fn read_record_batch(
         arrays.push(triple.0);
     }
 
-    RecordBatch::try_new(schema, arrays)
+    if let Some(cmd) = custom_metadata {
+        RecordBatch::try_new_with_custom_metadata(schema, arrays, cmd)
+    } else {
+        RecordBatch::try_new(schema, arrays)
+    }
 }
 
-/// Read the dictionary from the buffer and provided metadata,
+/// Read the dictionary from the buffer, provided metadata and optional custom metadata.
 /// updating the `dictionaries_by_field` with the resulting dictionary
 fn read_dictionary(
     buf: &[u8],
     batch: ipc::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_field: &mut [Option<ArrayRef>],
+    custom_metadata: Option<CustomMetaData>,
 ) -> Result<()> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
@@ -499,7 +537,7 @@ fn read_dictionary(
             // Make a fake schema for the dictionary batch.
             let schema = Schema {
                 fields: vec![Field::new("", value_type.as_ref().clone(), false)],
-                metadata: HashMap::new(),
+                metadata: None,
             };
             // Read a single column
             let record_batch = read_record_batch(
@@ -507,6 +545,7 @@ fn read_dictionary(
                 batch.data().unwrap(),
                 Arc::new(schema),
                 &dictionaries_by_field,
+                custom_metadata,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -556,6 +595,9 @@ pub struct FileReader<R: Read + Seek> {
 
     /// Metadata version
     metadata_version: ipc::MetadataVersion,
+
+    // Optional custom metadata.
+    custom_metadata: Option<CustomMetaData>,
 }
 
 impl<R: Read + Seek> FileReader<R> {
@@ -594,6 +636,8 @@ impl<R: Read + Seek> FileReader<R> {
         let footer = ipc::root_as_footer(&footer_data[..]).map_err(|err| {
             ArrowError::IoError(format!("Unable to get root as footer: {:?}", err))
         })?;
+
+        let footer_custom_metadata = read_custom_metadata(footer.custom_metadata());
 
         let blocks = footer.recordBatches().ok_or_else(|| {
             ArrowError::IoError(
@@ -639,7 +683,15 @@ impl<R: Read + Seek> FileReader<R> {
                     ))?;
                     reader.read_exact(&mut buf)?;
 
-                    read_dictionary(&buf, batch, &schema, &mut dictionaries_by_field)?;
+                    let custom_metadata = read_custom_metadata(message.custom_metadata());
+
+                    read_dictionary(
+                        &buf,
+                        batch,
+                        &schema,
+                        &mut dictionaries_by_field,
+                        custom_metadata,
+                    )?;
                 }
                 t => {
                     return Err(ArrowError::IoError(format!(
@@ -658,6 +710,7 @@ impl<R: Read + Seek> FileReader<R> {
             total_blocks,
             dictionaries_by_field,
             metadata_version: footer.version(),
+            custom_metadata: footer_custom_metadata,
         })
     }
 
@@ -733,11 +786,14 @@ impl<R: Read + Seek> FileReader<R> {
                 ))?;
                 self.reader.read_exact(&mut buf)?;
 
+                let custom_metadata = read_custom_metadata(message.custom_metadata());
+
                 read_record_batch(
                     &buf,
                     batch,
                     self.schema(),
                     &self.dictionaries_by_field,
+                    custom_metadata,
                 ).map(Some)
             }
             ipc::MessageHeader::NONE => {
@@ -886,10 +942,14 @@ impl<R: Read> StreamReader<R> {
             ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
         })?;
 
+        let custom_metadata = read_custom_metadata(message.custom_metadata());
+
         match message.header_type() {
             ipc::MessageHeader::Schema => Err(ArrowError::IoError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
+
+
             ipc::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IoError(
@@ -900,7 +960,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = vec![0; message.bodyLength() as usize];
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_field).map(Some)
+                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_field, custom_metadata).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -913,7 +973,7 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_field
+                    &buf, batch, &self.schema, &mut self.dictionaries_by_field, custom_metadata,
                 )?;
 
                 // read the next message until we encounter a RecordBatch

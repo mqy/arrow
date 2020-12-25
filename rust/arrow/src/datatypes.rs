@@ -22,7 +22,7 @@
 //!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
 //!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::default::Default;
 use std::fmt;
 use std::mem::size_of;
@@ -183,6 +183,8 @@ pub enum IntervalUnit {
     DayTime,
 }
 
+pub type CustomMetaData = BTreeMap<String, String>;
+
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
@@ -193,6 +195,9 @@ pub struct Field {
     nullable: bool,
     dict_id: i64,
     dict_is_ordered: bool,
+    /// A map of key-value pairs containing additional meta data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<CustomMetaData>,
 }
 
 pub trait ArrowNativeType:
@@ -1257,6 +1262,7 @@ impl Field {
             nullable,
             dict_id: 0,
             dict_is_ordered: false,
+            metadata: None,
         }
     }
 
@@ -1274,7 +1280,17 @@ impl Field {
             nullable,
             dict_id,
             dict_is_ordered,
+            metadata: None,
         }
+    }
+
+    pub fn set_dict(&mut self, dict_id: i64, dict_is_ordered: bool) {
+        self.dict_id = dict_id;
+        self.dict_is_ordered = dict_is_ordered;
+    }
+
+    pub fn set_metadata(&mut self, metadata: Option<CustomMetaData>) {
+        self.metadata = metadata;
     }
 
     /// Returns an immutable reference to the `Field`'s name
@@ -1311,6 +1327,12 @@ impl Field {
             DataType::Dictionary(_, _) => Some(self.dict_is_ordered),
             _ => None,
         }
+    }
+
+    /// Returns the optional custom metadata.
+    #[inline]
+    pub const fn metadata(&self) -> &Option<CustomMetaData> {
+        &self.metadata
     }
 
     /// Parse a `Field` definition from a JSON representation
@@ -1433,13 +1455,10 @@ impl Field {
                     }
                     _ => data_type,
                 };
-                Ok(Field {
-                    name,
-                    nullable,
-                    data_type,
-                    dict_id,
-                    dict_is_ordered,
-                })
+
+                let mut field = Field::new(&name, data_type, nullable);
+                field.set_dict(dict_id, dict_is_ordered);
+                Ok(field)
             }
             _ => Err(ArrowError::ParseError(
                 "Invalid json value type for field".to_string(),
@@ -1602,12 +1621,12 @@ impl fmt::Display for Field {
 ///
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Schema {
     pub(crate) fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub(crate) metadata: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) metadata: Option<CustomMetaData>,
 }
 
 impl Schema {
@@ -1615,7 +1634,7 @@ impl Schema {
     pub fn empty() -> Self {
         Self {
             fields: vec![],
-            metadata: HashMap::new(),
+            metadata: None,
         }
     }
 
@@ -1632,7 +1651,10 @@ impl Schema {
     /// let schema = Schema::new(vec![field_a, field_b]);
     /// ```
     pub fn new(fields: Vec<Field>) -> Self {
-        Self::new_with_metadata(fields, HashMap::new())
+        Self {
+            fields,
+            metadata: None,
+        }
     }
 
     /// Creates a new `Schema` from a sequence of `Field` values
@@ -1642,22 +1664,21 @@ impl Schema {
     ///
     /// ```
     /// # extern crate arrow;
-    /// # use arrow::datatypes::{Field, DataType, Schema};
-    /// # use std::collections::HashMap;
+    /// # use arrow::datatypes::{CustomMetaData, Field, DataType, Schema};
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
-    /// let mut metadata: HashMap<String, String> = HashMap::new();
+    /// let mut metadata = CustomMetaData::new();
     /// metadata.insert("row_count".to_string(), "100".to_string());
     ///
     /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
     /// ```
     #[inline]
-    pub const fn new_with_metadata(
-        fields: Vec<Field>,
-        metadata: HashMap<String, String>,
-    ) -> Self {
-        Self { fields, metadata }
+    pub const fn new_with_metadata(fields: Vec<Field>, metadata: CustomMetaData) -> Self {
+        Self {
+            fields,
+            metadata: Some(metadata),
+        }
     }
 
     /// Merge schema into self if it is compatible. Struct fields will be merged recursively.
@@ -1690,24 +1711,28 @@ impl Schema {
     /// ```
     pub fn try_merge(schemas: &[Self]) -> Result<Self> {
         let mut merged = Self::empty();
+        let mut merged_metadata = CustomMetaData::new();
 
         for schema in schemas {
-            for (key, value) in schema.metadata.iter() {
-                // merge metadata
-                match merged.metadata.get(key) {
-                    Some(old_val) => {
-                        if old_val != value {
-                            return Err(ArrowError::SchemaError(
-                                "Fail to merge schema due to conflicting metadata"
-                                    .to_string(),
-                            ));
+            if let Some(metadata) = schema.metadata() {
+                for (key, value) in metadata.iter() {
+                    // merge metadata
+                    match merged_metadata.get(key) {
+                        Some(old_val) => {
+                            if old_val != value {
+                                return Err(ArrowError::SchemaError(
+                                    "Fail to merge schema due to conflicting metadata"
+                                        .to_string(),
+                                ));
+                            }
                         }
-                    }
-                    None => {
-                        merged.metadata.insert(key.clone(), value.clone());
+                        None => {
+                            merged_metadata.insert(key.clone(), value.clone());
+                        }
                     }
                 }
             }
+
             // merge fields
             for field in &schema.fields {
                 let mut new_field = true;
@@ -1723,6 +1748,12 @@ impl Schema {
                     merged.fields.push(field.clone());
                 }
             }
+        }
+
+        if merged_metadata.is_empty() {
+            merged.metadata = None;
+        } else {
+            merged.metadata = Some(merged_metadata);
         }
 
         Ok(merged)
@@ -1754,6 +1785,12 @@ impl Schema {
             .collect()
     }
 
+    /// Returns an immutable reference of a specific `Field` instance selected by custom
+    /// meta data: by key and/or values.
+    pub fn field_with_custom_metadata(&self, _k: &str, _v: Vec<&str>) -> Result<&Field> {
+        unimplemented!()
+    }
+
     /// Find the index of the column with the given name
     pub fn index_of(&self, name: &str) -> Result<usize> {
         for i in 0..self.fields.len() {
@@ -1771,7 +1808,7 @@ impl Schema {
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
     #[inline]
-    pub const fn metadata(&self) -> &HashMap<String, String> {
+    pub const fn metadata(&self) -> &Option<CustomMetaData> {
         &self.metadata
     }
 
@@ -1807,11 +1844,13 @@ impl Schema {
                     ));
                 };
 
-                let metadata = if let Some(value) = schema.get("metadata") {
-                    Self::from_metadata(value)?
-                } else {
-                    HashMap::default()
-                };
+                let mut metadata = None;
+                if let Some(value) = schema.get("metadata") {
+                    let md = Self::from_metadata(value)?;
+                    if !md.is_empty() {
+                        metadata = Some(md);
+                    }
+                }
 
                 Ok(Self { fields, metadata })
             }
@@ -1823,10 +1862,10 @@ impl Schema {
 
     /// Parse a `metadata` definition from a JSON representation
     /// The JSON can either be an Object or an Array of Objects
-    fn from_metadata(json: &Value) -> Result<HashMap<String, String>> {
+    fn from_metadata(json: &Value) -> Result<CustomMetaData> {
         match json {
             Value::Array(_) => {
-                let mut hashmap = HashMap::new();
+                let mut hashmap = CustomMetaData::new();
                 let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
                     .map_err(|_| {
                         ArrowError::JsonError(
@@ -1899,6 +1938,43 @@ mod tests {
                 false,
             ),
         ]);
+    }
+
+    #[test]
+    fn serde_custom_metadata() {
+        #[derive(
+            Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord,
+        )]
+        struct Person {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            custom_metadata: Option<CustomMetaData>,
+        }
+
+        let mut person = Person {
+            custom_metadata: None,
+        };
+
+        let serialized = serde_json::to_string(&person).unwrap();
+        assert_eq!("{}", serialized);
+
+        let deserialized = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(person, deserialized);
+
+        person.custom_metadata = Some(CustomMetaData::new());
+        let serialized = serde_json::to_string(&person).unwrap();
+        assert_eq!("{\"custom_metadata\":{}}", serialized);
+
+        let deserialized = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(person, deserialized);
+
+        let mut metadata = CustomMetaData::new();
+        metadata.insert("key".to_string(), "value".to_string());
+        person.custom_metadata = Some(metadata);
+        let serialized = serde_json::to_string(&person).unwrap();
+        assert_eq!("{\"custom_metadata\":{\"key\":\"value\"}}", serialized);
+
+        let deserialized = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(person, deserialized);
     }
 
     #[test]
@@ -2061,11 +2137,10 @@ mod tests {
     #[test]
     fn schema_json() {
         // Add some custom metadata
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata: CustomMetaData = [("Key".to_string(), "Value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let schema = Schema::new_with_metadata(
             vec![
@@ -2578,7 +2653,7 @@ mod tests {
 
         assert_eq!(schema, schema2);
 
-        // Check that empty metadata produces empty value in JSON and can be parsed
+        // Check that empty metadata produces empty value in JSON and can be parsed as None.
         let json = r#"{
                 "fields": [
                     {
@@ -2594,7 +2669,7 @@ mod tests {
             }"#;
         let value: Value = serde_json::from_str(&json).unwrap();
         let schema = Schema::from(&value).unwrap();
-        assert!(schema.metadata.is_empty());
+        assert!(schema.metadata.is_none());
 
         // Check that metadata field is not required in the JSON.
         let json = r#"{
@@ -2611,7 +2686,7 @@ mod tests {
             }"#;
         let value: Value = serde_json::from_str(&json).unwrap();
         let schema = Schema::from(&value).unwrap();
-        assert!(schema.metadata.is_empty());
+        assert!(schema.metadata.is_none());
     }
 
     #[test]
@@ -2620,8 +2695,8 @@ mod tests {
         assert_eq!(schema.to_string(), "first_name: Utf8, \
         last_name: Utf8, \
         address: Struct([\
-        Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false }, \
-        Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false }]), \
+        Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }, \
+        Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }]), \
         interests: Dictionary(Int32, Utf8)")
     }
 
@@ -2799,7 +2874,7 @@ mod tests {
                 [("foo".to_string(), "bar".to_string())]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>(),
+                    .collect::<CustomMetaData>(),
             ),
         ])?;
 
@@ -2822,7 +2897,7 @@ mod tests {
                 [("foo".to_string(), "bar".to_string())]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>()
+                    .collect::<CustomMetaData>()
             )
         );
 
@@ -2874,14 +2949,14 @@ mod tests {
                 [("foo".to_string(), "bar".to_string()),]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>()
+                    .collect::<CustomMetaData>()
             ),
             Schema::new_with_metadata(
                 vec![Field::new("last_name", DataType::Utf8, false)],
                 [("foo".to_string(), "baz".to_string()),]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>()
+                    .collect::<CustomMetaData>()
             )
         ])
         .is_err());

@@ -23,10 +23,12 @@
 //!
 //! The interfaces for converting arrow schema to parquet schema is coming.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, DateUnit, Field, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{
+    CustomMetaData, DataType, DateUnit, Field, IntervalUnit, Schema, TimeUnit,
+};
 use arrow::ipc::writer;
 
 use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
@@ -127,9 +129,11 @@ where
 
     // add the Arrow metadata to the Parquet metadata
     if let Some(arrow_schema) = &arrow_schema_metadata {
-        arrow_schema.metadata().iter().for_each(|(k, v)| {
-            metadata.insert(k.clone(), v.clone());
-        });
+        if let Some(md) = arrow_schema.metadata() {
+            md.iter().for_each(|(k, v)| {
+                metadata.insert(k.clone(), v.clone());
+            });
+        }
     }
 
     let mut base_nodes = Vec::new();
@@ -216,8 +220,10 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Option<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
+    let custom_metadata = CustomMetaData::default();
     let data_gen = arrow::ipc::writer::IpcDataGenerator::default();
-    let mut serialized_schema = data_gen.schema_to_bytes(&schema, &options);
+    let mut serialized_schema =
+        data_gen.schema_to_bytes(&schema, &options, custom_metadata);
 
     // manually prepending the length to the schema as arrow uses the legacy IPC format
     // TODO: change after addressing ARROW-9777
@@ -276,10 +282,10 @@ pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
 
 fn parse_key_value_metadata(
     key_value_metadata: &Option<Vec<KeyValue>>,
-) -> Option<HashMap<String, String>> {
+) -> Option<CustomMetaData> {
     match key_value_metadata {
         Some(key_values) => {
-            let map: HashMap<String, String> = key_values
+            let map: CustomMetaData = key_values
                 .iter()
                 .filter_map(|kv| {
                     kv.value
@@ -789,9 +795,11 @@ impl ParquetTypeConverter<'_> {
 mod tests {
     use super::*;
 
-    use std::{collections::HashMap, convert::TryFrom, sync::Arc};
+    use std::{convert::TryFrom, sync::Arc};
 
-    use arrow::datatypes::{DataType, DateUnit, Field, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{
+        CustomMetaData, DataType, DateUnit, Field, IntervalUnit, TimeUnit,
+    };
 
     use crate::file::{metadata::KeyValue, reader::SerializedFileReader};
     use crate::{
@@ -1477,8 +1485,9 @@ mod tests {
         key_value_metadata.push(KeyValue::new("foo".to_owned(), Some("bar".to_owned())));
         key_value_metadata.push(KeyValue::new("baz".to_owned(), None));
 
-        let mut expected_metadata: HashMap<String, String> = HashMap::new();
-        expected_metadata.insert("foo".to_owned(), "bar".to_owned());
+        let mut metadata = CustomMetaData::new();
+        metadata.insert("foo".to_owned(), "bar".to_owned());
+        let expected_metadata = Some(metadata);
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
@@ -1491,11 +1500,10 @@ mod tests {
     fn test_arrow_schema_roundtrip() -> Result<()> {
         // This tests the roundtrip of an Arrow schema
         // Fields that are commented out fail roundtrip tests or are unsupported by the writer
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata: CustomMetaData = [("Key".to_string(), "Value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let schema = Schema::new_with_metadata(
             vec![
@@ -1617,11 +1625,10 @@ mod tests {
     #[test]
     #[ignore = "Roundtrip of lists currently fails because we don't check their types correctly in the Arrow schema"]
     fn test_arrow_schema_roundtrip_lists() -> Result<()> {
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata: CustomMetaData = [("Key".to_string(), "Value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let schema = Schema::new_with_metadata(
             vec![
