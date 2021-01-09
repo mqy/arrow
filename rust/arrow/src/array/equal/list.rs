@@ -154,9 +154,9 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && offset_value_equal::<T>(
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || offset_value_equal::<T>(
                         lhs_values,
                         rhs_values,
                         child_lhs_nulls.as_ref(),
@@ -166,7 +166,7 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
                         lhs_pos,
                         rhs_pos,
                         1,
-                    )
+                    ))
         })
     }
 }

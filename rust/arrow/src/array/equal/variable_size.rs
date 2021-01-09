@@ -94,9 +94,10 @@ pub(super) fn variable_sized_equal<T: OffsetSizeTrait>(
                 .map(|v| get_bit(v.as_slice(), rhs_pos))
                 .unwrap_or(false);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && offset_value_equal(
+            // NOTE: some tests failed after changed from: lhs_is_null == rhs_is_null && (lhs_is_null || offset_value_equal(...))
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || offset_value_equal(
                         lhs_values,
                         rhs_values,
                         lhs_offsets,
@@ -104,7 +105,7 @@ pub(super) fn variable_sized_equal<T: OffsetSizeTrait>(
                         lhs_pos,
                         rhs_pos,
                         1,
-                    )
+                    ))
         })
     }
 }

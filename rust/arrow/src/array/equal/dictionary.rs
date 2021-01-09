@@ -66,9 +66,9 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_range(
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || equal_range(
                         lhs_values,
                         rhs_values,
                         lhs_values.null_buffer(),
@@ -76,7 +76,7 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
                         lhs_keys[lhs_pos].to_usize().unwrap(),
                         rhs_keys[rhs_pos].to_usize().unwrap(),
                         1,
-                    )
+                    ))
         })
     }
 }

@@ -59,15 +59,16 @@ pub(super) fn primitive_equal<T>(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_len(
+            // NOTE: some tests failed after changed from: lhs_is_null == rhs_is_null && (lhs_is_null || equal_len(...))
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || equal_len(
                         lhs_values,
                         rhs_values,
                         lhs_pos * byte_width,
                         rhs_pos * byte_width,
                         byte_width, // 1 * byte_width since we are comparing a single entry
-                    )
+                    ))
         })
     }
 }

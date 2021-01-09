@@ -82,9 +82,9 @@ pub(super) fn struct_equal(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_values(lhs, rhs, lhs_nulls, rhs_nulls, lhs_pos, rhs_pos, 1)
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || equal_values(lhs, rhs, lhs_nulls, rhs_nulls, lhs_pos, rhs_pos, 1))
         })
     }
 }

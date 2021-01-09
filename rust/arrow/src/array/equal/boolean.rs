@@ -69,6 +69,9 @@ pub(super) fn boolean_equal(
                         rhs_pos + rhs.offset(),
                         1,
                     )
+            // lhs_is_null == rhs_is_null
+            // && (lhs_is_null
+            //     || get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos))
         })
     }
 }

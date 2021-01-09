@@ -363,6 +363,23 @@ mod tests {
     }
 
     #[test]
+    fn test_direct_call_boolean_equal() {
+        // Verify ARROW-11160, should fail
+        let a = BooleanArray::from(vec![None]).data();
+        let b = BooleanArray::from(vec![Some(false)]).data();
+
+        let lhs = a.as_ref();
+        let rhs = b.as_ref();
+        let lhs_nulls = lhs.null_buffer();
+        let rhs_nulls = rhs.null_buffer();
+
+        assert_eq!(
+            boolean::boolean_equal(lhs, rhs, lhs_nulls, rhs_nulls, 0, 0, lhs.len()),
+            false
+        );
+    }
+
+    #[test]
     fn test_primitive() {
         let cases = vec![
             (

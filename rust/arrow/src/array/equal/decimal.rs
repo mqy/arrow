@@ -62,15 +62,15 @@ pub(super) fn decimal_equal(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + lhs.offset());
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_len(
+            lhs_is_null == rhs_is_null
+                && (lhs_is_null
+                    || equal_len(
                         lhs_values,
                         rhs_values,
                         lhs_pos * size,
                         rhs_pos * size,
                         size, // 1 * size since we are comparing a single entry
-                    )
+                    ))
         })
     }
 }
