@@ -72,10 +72,11 @@ pub(crate) fn get_codec_for_read(
     }
 
     // Possibly obtain codec information from experimental serialization format
-    // in 0.17.x. Ref `cpp/src/arrow/util/compression.cc`.
+    // in 0.17.x. Ref `cpp/src/arrow/util/reader.cc`.
     if metadata_version == MetadataVersion::V4 {
         if let Some(codec) = schema_metadata.get("ARROW:experimental_compression") {
-            if codec == "lz4" {
+            // Arrow 0.17 stored string in upper case.
+            if codec == "LZ4" {
                 return Ok(Some(Box::new(Lz4CompressionCodec {})));
             } else {
                 return Err(ArrowError::IoError(format!(
@@ -89,12 +90,12 @@ pub(crate) fn get_codec_for_read(
     Ok(None)
 }
 
+// Stateless struct as with lz4 frame codec (not lz4 raw/block), see Message.fbs.
 pub struct Lz4CompressionCodec {}
 const LZ4_BUFFER_SIZE: usize = 4096;
 
 impl IpcCompressionCodec for Lz4CompressionCodec {
     fn compress(&self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<usize> {
-        // compress with lz4 frame.
         let preferences = lz4f::Preferences::default();
         lz4f::compress_to_vec(input_buf, output_buf, &preferences).map_err(|err| {
             ArrowError::CDataInterface(format!(
@@ -130,16 +131,13 @@ mod tests {
 
     #[test]
     fn test_lz4_roundtrip() {
-        if false {
-            let mut rng = seedable_rng();
-            let mut bytes: Vec<u8> = Vec::with_capacity(INPUT_BUFFER_LEN);
+        let mut rng = seedable_rng();
+        let mut bytes: Vec<u8> = Vec::with_capacity(INPUT_BUFFER_LEN);
 
-            (0..INPUT_BUFFER_LEN).for_each(|_| {
-                bytes.push(rng.gen::<u8>());
-            });
-        }
+        (0..INPUT_BUFFER_LEN).for_each(|_| {
+            bytes.push(rng.gen::<u8>());
+        });
 
-        let bytes: Vec<u8> = Vec::with_capacity(0);
         let codec = Lz4CompressionCodec {};
         let mut compressed = Vec::new();
         codec.compress(&bytes, &mut compressed).unwrap();

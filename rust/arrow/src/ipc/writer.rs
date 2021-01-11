@@ -787,7 +787,10 @@ fn write_buffer(
         arrow_data.extend_from_slice(buf_slice);
     }
 
-    // assert_eq!(len % 8, 0, "Buffer width not a multiple of 8 bytes");
+    // https://github.com/apache/arrow/blob/master/docs/source/format/Columnar.rst#recordbatch-message:
+    // The size field of Buffer is not required to account for padding bytes. Since this
+    // metadata can be used to communicate in-memory pointer addresses between libraries,
+    // it is recommended to set size to the actual memory size rather than the padded size.
     buffers.push(ipc::Buffer::new(offset, total_len as i64));
 
     let pad_len = pad_to_8(total_len);
