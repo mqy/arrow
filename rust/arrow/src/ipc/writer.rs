@@ -33,7 +33,7 @@ use crate::ipc;
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
-use ipc::compression::{get_codec, Codec};
+use ipc::compression::{get_codec_by_type, Codec};
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
@@ -165,7 +165,11 @@ impl IpcDataGenerator {
         let schema = batch.schema();
         let mut encoded_dictionaries = Vec::with_capacity(schema.fields().len());
 
-        let codec = get_codec(write_options.compression_type)?;
+        let mut codec = None;
+        if let Some(name) = write_options.compression_type {
+            codec = Some(get_codec_by_type(name)?);
+        }
+
         let codec_ref = codec.as_ref();
 
         for (i, field) in schema.fields().iter().enumerate() {
@@ -209,7 +213,12 @@ impl IpcDataGenerator {
         let mut buffers: Vec<ipc::Buffer> = vec![];
         let mut arrow_data: Vec<u8> = vec![];
         let mut offset = 0;
-        let codec = get_codec(write_options.compression_type)?;
+
+        let mut codec = None;
+        if let Some(name) = write_options.compression_type {
+            codec = Some(get_codec_by_type(name)?);
+        }
+
         for array in batch.columns() {
             let array_data = array.data();
             offset = write_array_data(
@@ -649,8 +658,8 @@ fn write_message<W: Write>(
 }
 
 fn write_body_buffers<W: Write>(writer: &mut BufWriter<W>, data: &[u8]) -> Result<usize> {
-    let len = data.len() as u32;
-    let pad_len = pad_to_8(len) as u32;
+    let len = data.len() as usize;
+    let pad_len = pad_to_8(len);
     let total_len = len + pad_len;
 
     // write body buffer
@@ -660,7 +669,7 @@ fn write_body_buffers<W: Write>(writer: &mut BufWriter<W>, data: &[u8]) -> Resul
     }
 
     writer.flush()?;
-    Ok(total_len as usize)
+    Ok(total_len)
 }
 
 /// Write a record batch to the writer, writing the message size before the message
@@ -764,28 +773,36 @@ fn write_buffer(
     offset: i64,
     codec: Option<&Codec>,
 ) -> Result<i64> {
-    let mut compressed = Vec::new();
-    let buf_slice = match codec {
-        Some(codec) => {
-            codec.compress(buffer.as_slice(), &mut compressed)?;
-            compressed.as_slice()
-        }
-        None => buffer.as_slice(),
-    };
-    let len = buf_slice.len();
-    let pad_len = pad_to_8(len as u32);
-    let total_len: i64 = (len + pad_len) as i64;
+    let buf_slice = buffer.as_slice();
+    let mut total_len = buf_slice.len();
+
+    if let Some(codec) = codec {
+        // Write `plain length` of `buffer` + compressed bytes.
+        // See [`BodyCompressionMethod`](ipc::gen:BodyCompressionMethod) from Message.fbs.
+        let plain_len = total_len as i64;
+        arrow_data.extend_from_slice(&plain_len.to_le_bytes());
+        total_len =
+            std::mem::size_of_val(&plain_len) + codec.compress(buf_slice, arrow_data)?;
+    } else {
+        arrow_data.extend_from_slice(buf_slice);
+    }
+
     // assert_eq!(len % 8, 0, "Buffer width not a multiple of 8 bytes");
-    buffers.push(ipc::Buffer::new(offset, total_len));
-    arrow_data.extend_from_slice(buf_slice);
-    arrow_data.extend_from_slice(&vec![0u8; pad_len][..]);
-    Ok(offset + total_len)
+    buffers.push(ipc::Buffer::new(offset, total_len as i64));
+
+    let pad_len = pad_to_8(total_len);
+    if pad_len > 0 {
+        total_len += pad_len;
+        arrow_data.extend_from_slice(&vec![0_u8; pad_len][..]);
+    }
+
+    Ok(offset + total_len as i64)
 }
 
 /// Calculate an 8-byte boundary and return the number of bytes needed to pad to 8 bytes
 #[inline]
-fn pad_to_8(len: u32) -> usize {
-    (((len + 7) & !7) - len) as usize
+fn pad_to_8(len: usize) -> usize {
+    ((len + 7) & !7) - len
 }
 
 #[cfg(test)]

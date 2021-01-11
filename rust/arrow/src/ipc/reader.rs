@@ -32,7 +32,7 @@ use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
 
-use ipc::compression::{get_codec, Codec};
+use ipc::compression::{get_codec_for_read, Codec};
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
 
@@ -44,8 +44,18 @@ fn read_buffer(buf: &ipc::Buffer, a_data: &[u8], codec: Option<&Codec>) -> Buffe
     // decompress the buffer if it is compressed
     match codec {
         Some(codec) => {
+            // TODO: check len; don't use unwrap
             let mut buf = Vec::new();
-            codec.decompress(buf_data, &mut buf).unwrap();
+            let mut len_buf = [0_u8; 8];
+            len_buf.copy_from_slice(&buf_data[0..8]);
+            let plain_len = i64::from_le_bytes(len_buf);
+            let decoded_len = codec.decompress(&buf_data[8..], &mut buf).unwrap();
+            if plain_len as usize != decoded_len {
+                panic!(format!(
+                    "plain_len: {}, decode_len: {}",
+                    plain_len, decoded_len
+                ));
+            }
             Buffer::from(buf)
         }
         None => Buffer::from(&buf_data),
@@ -425,6 +435,7 @@ pub fn read_record_batch(
     buf: &[u8],
     batch: ipc::RecordBatch,
     schema: SchemaRef,
+    metadata_version: ipc::MetadataVersion,
     dictionaries: &[Option<ArrayRef>],
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
@@ -438,19 +449,8 @@ pub fn read_record_batch(
     let mut node_index = 0;
     let mut arrays = vec![];
 
-    let codec: Option<Codec> = match batch.compression() {
-        Some(body_compression) => {
-            let method = body_compression.method();
-            if ipc::BodyCompressionMethod::BUFFER != method {
-                return Err(ArrowError::IoError(format!(
-                    "Encountered unsupported body compression method: {:?}",
-                    method
-                )));
-            }
-            get_codec(Some(body_compression.codec()))?
-        }
-        None => None,
-    };
+    let codec =
+        get_codec_for_read(&schema.metadata(), metadata_version, &batch.compression())?;
 
     // keep track of index as lists require more than one node
     for field in schema.fields() {
@@ -478,6 +478,7 @@ fn read_dictionary(
     buf: &[u8],
     batch: ipc::DictionaryBatch,
     schema: &Schema,
+    metadata_version: ipc::MetadataVersion,
     dictionaries_by_field: &mut [Option<ArrayRef>],
 ) -> Result<()> {
     if batch.isDelta() {
@@ -507,6 +508,7 @@ fn read_dictionary(
                 &buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
+                metadata_version,
                 &dictionaries_by_field,
             )?;
             Some(record_batch.column(0).clone())
@@ -640,7 +642,13 @@ impl<R: Read + Seek> FileReader<R> {
                     ))?;
                     reader.read_exact(&mut buf)?;
 
-                    read_dictionary(&buf, batch, &schema, &mut dictionaries_by_field)?;
+                    read_dictionary(
+                        &buf,
+                        batch,
+                        &schema,
+                        message.version(),
+                        &mut dictionaries_by_field,
+                    )?;
                 }
                 t => {
                     return Err(ArrowError::IoError(format!(
@@ -738,6 +746,7 @@ impl<R: Read + Seek> FileReader<R> {
                     &buf,
                     batch,
                     self.schema(),
+                    message.version(),
                     &self.dictionaries_by_field,
                 ).map(Some)
             }
@@ -901,7 +910,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = vec![0; message.bodyLength() as usize];
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_field).map(Some)
+                read_record_batch(&buf, batch, self.schema(), message.version(), &self.dictionaries_by_field).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -914,7 +923,7 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_field
+                    &buf, batch, &self.schema, message.version(), &mut self.dictionaries_by_field
                 )?;
 
                 // read the next message until we encounter a RecordBatch

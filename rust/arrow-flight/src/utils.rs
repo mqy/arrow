@@ -143,6 +143,7 @@ pub fn flight_data_to_arrow_batch(
                     &data.data_body,
                     batch,
                     schema,
+                    message.version(),
                     &dictionaries_by_field,
                 ))
             },
