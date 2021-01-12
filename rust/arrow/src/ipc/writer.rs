@@ -659,13 +659,12 @@ fn write_message<W: Write>(
 
 fn write_body_buffers<W: Write>(writer: &mut BufWriter<W>, data: &[u8]) -> Result<usize> {
     let len = data.len() as usize;
-    let pad_len = pad_to_8(len);
-    let total_len = len + pad_len;
+    let total_len = pad_to_8(len);
 
     // write body buffer
     writer.write_all(data)?;
-    if pad_len > 0 {
-        writer.write_all(&vec![0u8; pad_len as usize][..])?;
+    if total_len > len {
+        writer.write_all(&vec![0u8; (total_len - len) as usize][..])?;
     }
 
     writer.flush()?;
@@ -774,38 +773,44 @@ fn write_buffer(
     codec: Option<&Codec>,
 ) -> Result<i64> {
     let buf_slice = buffer.as_slice();
-    let mut total_len = buf_slice.len();
+    // The actual memory size of the buffer.
+    let mut buf_len = buf_slice.len();
 
     if let Some(codec) = codec {
-        // Write `plain length` of `buffer` + compressed bytes.
+        // Write 8 bytes of the `i64` `uncompressed length` and compressed bytes of the buffer.
         // See [`BodyCompressionMethod`](ipc::gen:BodyCompressionMethod) from Message.fbs.
-        let plain_len = total_len as i64;
-        arrow_data.extend_from_slice(&plain_len.to_le_bytes());
-        total_len =
-            std::mem::size_of_val(&plain_len) + codec.compress(buf_slice, arrow_data)?;
+        let uncompressed_len = buf_len as i64;
+        let size_of_uncompressed_len = std::mem::size_of_val(&uncompressed_len);
+        arrow_data.extend_from_slice(&uncompressed_len.to_le_bytes());
+        let compressed_len = codec.compress(buf_slice, arrow_data)?;
+        buf_len = size_of_uncompressed_len + compressed_len;
     } else {
         arrow_data.extend_from_slice(buf_slice);
     }
 
-    // https://github.com/apache/arrow/blob/master/docs/source/format/Columnar.rst#recordbatch-message:
+    // Quote from https://github.com/apache/arrow/blob/master/docs/source/format/Columnar.rst#recordbatch-message:
     // The size field of Buffer is not required to account for padding bytes. Since this
     // metadata can be used to communicate in-memory pointer addresses between libraries,
     // it is recommended to set size to the actual memory size rather than the padded size.
-    buffers.push(ipc::Buffer::new(offset, total_len as i64));
+    //
+    // The arrow C++ implementation sets size to the actual memory size.
+    // If we set as size as padded size, then when read arrow file with compressed record
+    // batches, C++ or Python IPC will fail with error : Lz4 compressed input contains more
+    // than one frame.
+    buffers.push(ipc::Buffer::new(offset, buf_len as i64));
 
-    let pad_len = pad_to_8(total_len);
-    if pad_len > 0 {
-        total_len += pad_len;
-        arrow_data.extend_from_slice(&vec![0_u8; pad_len][..]);
+    let padded_buf_len = pad_to_8(buf_len);
+    if padded_buf_len > buf_len {
+        arrow_data.extend_from_slice(&vec![0_u8; padded_buf_len - buf_len][..]);
     }
 
-    Ok(offset + total_len as i64)
+    Ok(offset + padded_buf_len as i64)
 }
 
-/// Calculate an 8-byte boundary and return the number of bytes needed to pad to 8 bytes
+/// Calculate an 8-byte boundary and return the new padded len (>=`len`).
 #[inline]
 fn pad_to_8(len: usize) -> usize {
-    ((len + 7) & !7) - len
+    (len + 7) & !7
 }
 
 #[cfg(test)]
