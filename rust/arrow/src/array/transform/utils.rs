@@ -30,6 +30,7 @@ pub(super) fn reserve_for_bits(buffer: &mut MutableBuffer, len: usize) {
 
 /// sets all bits on `write_data` on the range `[offset_write..offset_write+len]` to be equal to the
 /// bits on `data` on the range `[offset_read..offset_read+len]`
+/// Panics when slice index out of bounds.
 pub(super) fn set_bits(
     write_data: &mut [u8],
     data: &[u8],
@@ -41,8 +42,9 @@ pub(super) fn set_bits(
     (0..len).for_each(|i| {
         if bit_util::get_bit(data, offset_read + i) {
             bit_util::set_bit(write_data, offset_write + i);
-        } else {
             count += 1;
+        } else {
+            bit_util::unset_bit(write_data, offset_write + i);
         }
     });
     count
@@ -75,4 +77,41 @@ pub(super) unsafe fn get_last_offset<T: OffsetSizeTrait>(
     let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *offsets.get_unchecked(offsets.len() - 1)
+}
+#[cfg(test)]
+mod tests {
+    use super::set_bits;
+
+    #[test]
+    fn test_set_bits() {
+        let byte_0 = 0_u8;
+        let byte_3 = 3_u8;
+        let start = 0;
+        let len = 2;
+
+        let mut dst = [byte_0; 1];
+        let src = [byte_3; 1];
+        let count = set_bits(&mut dst[..], &src[..], start, start, len);
+        assert_eq!(count, 2);
+        assert_eq!(dst[0], byte_3);
+
+        let mut dst = [byte_3; 1];
+        let src = [byte_0; 1];
+        let count = set_bits(&mut dst[..], &src[..], start, start, len);
+        assert_eq!(count, 0);
+        assert_eq!(dst[0], byte_0);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds: the len is 1 but the index is 1")]
+    fn test_set_bits_panic() {
+        let byte_0 = 0_u8;
+        let byte_3 = 3_u8;
+        let mut dst = [byte_0; 1];
+        let src = [byte_3; 1];
+        let start = 7;
+
+        let _ = set_bits(&mut dst[..], &src[..], start, start, 1);
+        let _ = set_bits(&mut dst[..], &src[..], start, start, 2);
+    }
 }
